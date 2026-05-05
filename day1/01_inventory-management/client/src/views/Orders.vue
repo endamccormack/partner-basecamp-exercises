@@ -27,6 +27,54 @@
         </div>
       </div>
 
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-header">
+          <h2 class="card-title">Submitted Restocking Orders</h2>
+          <span class="badge info">{{ restockOrders.length }}</span>
+        </div>
+        <div class="table-container">
+          <table class="orders-table restock-table">
+            <thead>
+              <tr>
+                <th class="col-order-number">Order #</th>
+                <th class="col-date">Created</th>
+                <th class="col-items">Items</th>
+                <th class="col-value">Total Value</th>
+                <th class="col-lead-time">Lead Time</th>
+                <th class="col-date">ETA</th>
+                <th class="col-status">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="restockOrders.length === 0">
+                <td colspan="7" class="empty-state">No restocking orders submitted yet.</td>
+              </tr>
+              <tr v-for="ro in restockOrders" :key="ro.id">
+                <td class="col-order-number"><strong>{{ ro.order_number }}</strong></td>
+                <td class="col-date">{{ formatDate(ro.created_date) }}</td>
+                <td class="col-items">
+                  <details class="items-details">
+                    <summary class="items-summary">{{ ro.items.length }} items</summary>
+                    <div class="items-dropdown">
+                      <div v-for="item in ro.items" :key="item.item_sku" class="item-entry">
+                        <span class="item-name">{{ item.item_name }}</span>
+                        <span class="item-meta">{{ item.item_sku }} &mdash; Qty: {{ item.quantity }}</span>
+                      </div>
+                    </div>
+                  </details>
+                </td>
+                <td class="col-value"><strong>${{ ro.total_value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</strong></td>
+                <td class="col-lead-time">{{ computeLeadTime(ro.created_date, ro.expected_delivery) }}</td>
+                <td class="col-date">{{ formatDate(ro.expected_delivery) }}</td>
+                <td class="col-status">
+                  <span class="badge success">{{ ro.status }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <h3 class="card-title">{{ t('orders.allOrders') }} ({{ orders.length }})</h3>
@@ -95,6 +143,7 @@ export default {
     const loading = ref(true)
     const error = ref(null)
     const orders = ref([])
+    const restockOrders = ref([])
 
     // Use shared filters
     const {
@@ -109,14 +158,28 @@ export default {
       try {
         loading.value = true
         const filters = getCurrentFilters()
-        const fetchedOrders = await api.getOrders(filters)
 
-        // Sort orders by order_date (earliest first)
-        orders.value = fetchedOrders.sort((a, b) => {
-          const dateA = new Date(a.order_date)
-          const dateB = new Date(b.order_date)
-          return dateA - dateB
-        })
+        const [fetchedOrders, fetchedRestockOrders] = await Promise.allSettled([
+          api.getOrders(filters),
+          api.getRestockOrders()
+        ])
+
+        if (fetchedOrders.status === 'fulfilled') {
+          // Sort orders by order_date (earliest first)
+          orders.value = fetchedOrders.value.sort((a, b) => {
+            const dateA = new Date(a.order_date)
+            const dateB = new Date(b.order_date)
+            return dateA - dateB
+          })
+        } else {
+          error.value = 'Failed to load orders: ' + fetchedOrders.reason.message
+        }
+
+        if (fetchedRestockOrders.status === 'fulfilled') {
+          restockOrders.value = fetchedRestockOrders.value
+        } else {
+          console.error('Failed to load restock orders:', fetchedRestockOrders.reason)
+        }
       } catch (err) {
         error.value = 'Failed to load orders: ' + err.message
       } finally {
@@ -143,6 +206,14 @@ export default {
       return statusMap[status] || 'info'
     }
 
+    const computeLeadTime = (createdDate, expectedDelivery) => {
+      const created = new Date(createdDate)
+      const delivery = new Date(expectedDelivery)
+      if (isNaN(created.getTime()) || isNaN(delivery.getTime())) return 'N/A'
+      const days = Math.round((delivery - created) / 86400000)
+      return `${days} days`
+    }
+
     const formatDate = (dateString) => {
       const { currentLocale } = useI18n()
       const locale = currentLocale.value === 'ja' ? 'ja-JP' : 'en-US'
@@ -160,9 +231,11 @@ export default {
       loading,
       error,
       orders,
+      restockOrders,
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
+      computeLeadTime,
       currencySymbol,
       translateProductName,
       translateCustomerName
@@ -275,5 +348,17 @@ export default {
 .item-meta {
   font-size: 0.813rem;
   color: #64748b;
+}
+
+/* Restock orders table */
+.restock-table .col-lead-time {
+  width: 110px;
+}
+
+.empty-state {
+  text-align: center;
+  color: #64748b;
+  padding: 1.5rem;
+  font-size: 0.875rem;
 }
 </style>
